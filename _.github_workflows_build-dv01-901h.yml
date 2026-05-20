@@ -1,0 +1,233 @@
+name: Build ImmortalWrt for DV01-901H (KT-708)
+
+on:
+  workflow_dispatch:
+    inputs:
+      branch:
+        description: 'ImmortalWrt Branch'
+        required: true
+        default: 'master'
+        type: choice
+        options:
+          - master
+          - openwrt-24.10
+      release:
+        description: 'Create GitHub Release?'
+        required: false
+        default: true
+        type: boolean
+
+  push:
+    branches: [ main, master ]
+
+  schedule:
+    - cron: '0 3 * * 0'
+
+env:
+  REPO_URL: https://github.com/immortalwrt/immortalwrt.git
+  REPO_BRANCH: ${{ github.event.inputs.branch || 'master' }}
+  TZ: Africa/Cairo
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    name: Build DV01-901H (IPQ4019)
+
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v4
+
+    - name: Setup Build Environment
+      env:
+        DEBIAN_FRONTEND: noninteractive
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y \
+          ack antlr3 asciidoc autoconf automake autopoint binutils bison \
+          build-essential bzip2 ccache clang cmake cpio curl \
+          device-tree-compiler ecj fastjar flex gawk gettext \
+          gcc-multilib g++-multilib git gnutls-dev gperf haveged \
+          help2man intltool lib32gcc-s1 libc6-dev-i386 libelf-dev \
+          libglib2.0-dev libgmp3-dev libltdl-dev libmpc-dev \
+          libmpfr-dev libncurses-dev libpython3-dev libreadline-dev \
+          libssl-dev libtool libyaml-dev libz-dev lld llvm lrzsz \
+          mkisofs msmtp nano ninja-build p7zip p7zip-full patch \
+          pkgconf python3 python3-pip python3-ply python3-docutils \
+          python3-pyelftools qemu-utils re2c rsync scons \
+          squashfs-tools subversion swig texinfo uglifyjs upx-ucl \
+          unzip vim wget xmlto xxd zlib1g-dev zstd
+        sudo apt-get clean
+
+    - name: Free Disk Space
+      run: |
+        sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
+          /opt/cabal /opt/haskell /usr/local/share/boost "$AGENT_TOOLSDIRECTORY"
+        sudo docker image prune -a -f
+        df -h
+
+    - name: Clone ImmortalWrt Latest
+      run: |
+        git clone --depth 1 -b $REPO_BRANCH $REPO_URL openwrt
+        cd openwrt
+        echo "Branch: $REPO_BRANCH"
+        git log -1 --format="%H %s %ci"
+
+    - name: Copy Device Tree & Configs
+      run: |
+        # Create device tree directory for kernel 6.6 (master/24.10)
+        DTS_DIR="openwrt/target/linux/ipq40xx/files/arch/arm/boot/dts/qcom"
+        mkdir -p "$DTS_DIR"
+
+        # Copy our DTS file
+        cp dts/qcom-ipq4019-dv01-901h.dts "$DTS_DIR/"
+        echo "DTS copied to: $DTS_DIR"
+
+        # Copy config
+        cp .config openwrt/.config
+
+        # Copy base-files (network config, board detection)
+        if [ -d "base-files" ]; then
+          cp -r base-files/* openwrt/target/linux/ipq40xx/base-files/ 2>/dev/null || true
+        fi
+
+        # Copy device image profile
+        if [ -f "image/generic.mk.patch" ]; then
+          cat image/generic.mk.patch >> openwrt/target/linux/ipq40xx/image/generic.mk
+        fi
+
+    - name: Update Feeds
+      run: |
+        cd openwrt
+        ./scripts/feeds update -a
+        ./scripts/feeds install -a
+
+    - name: Configure Build
+      run: |
+        cd openwrt
+        make defconfig
+        # Verify our device is selected
+        grep "CONFIG_TARGET_ipq40xx_generic_DEVICE_davolink_dv01-901h" .config || {
+          echo "WARNING: Device not selected, checking available devices..."
+          grep "CONFIG_TARGET_ipq40xx_generic_DEVICE_" .config | head -5
+        }
+
+    - name: Download Sources
+      run: |
+        cd openwrt
+        make download -j$(nproc) 2>&1 | tee download.log
+        find dl -size -1024c -exec ls -l {} \;
+        find dl -size -1024c -exec rm -f {} \;
+
+    - name: Compile Firmware
+      run: |
+        cd openwrt
+        make -j$(nproc) 2>&1 | tee build.log
+        if [ $? -ne 0 ]; then
+          echo "Parallel build failed, retrying single thread..."
+          make -j1 V=s 2>&1 | tee build_verbose.log
+        fi
+
+    - name: Verify Build
+      run: |
+        cd openwrt
+        SYSUPGRADE=$(find bin/targets/ipq40xx/generic/ -name "*dv01-901h*sysupgrade.bin" 2>/dev/null | head -1)
+        if [ -z "$SYSUPGRADE" ]; then
+          echo "WARNING: No dv01-901h image found, checking generic..."
+          SYSUPGRADE=$(find bin/targets/ipq40xx/generic/ -name "*sysupgrade.bin" | head -1)
+        fi
+
+        if [ -z "$SYSUPGRADE" ]; then
+          echo "ERROR: No sysupgrade image found!"
+          ls -la bin/targets/ipq40xx/generic/ || true
+          exit 1
+        fi
+
+        SIZE=$(stat -c%s "$SYSUPGRADE")
+        echo "Image: $SYSUPGRADE"
+        echo "Size: $(echo "$SIZE / 1024 / 1024" | bc)MB"
+        echo "Build verified!"
+
+    - name: Upload Artifacts
+      uses: actions/upload-artifact@v4
+      if: always()
+      with:
+        name: immortalwrt-dv01-901h-${{ github.run_number }}
+        path: |
+          openwrt/bin/targets/ipq40xx/generic/*-sysupgrade.bin
+          openwrt/bin/targets/ipq40xx/generic/*-initramfs*
+          openwrt/bin/targets/ipq40xx/generic/*-factory*
+          openwrt/build.log
+        if-no-files-found: warn
+        retention-days: 30
+
+    - name: Create Release
+      uses: softprops/action-gh-release@v1
+      if: github.event.inputs.release == 'true' || (github.event_name == 'push' && contains(github.ref, 'refs/tags/'))
+      with:
+        files: |
+          openwrt/bin/targets/ipq40xx/generic/*-sysupgrade.bin
+          openwrt/bin/targets/ipq40xx/generic/*-initramfs*
+        body: |
+          ## ImmortalWrt for Davolink DV01-901H (KT-708)
+
+          **Build:** ${{ github.run_number }}
+          **Branch:** ${{ env.REPO_BRANCH }}
+          **Commit:** ${{ github.sha }}
+          **Date:** ${{ github.event.head_commit.timestamp || github.event.created_at }}
+
+          ### Device
+          - **Model:** Davolink DV01-901H / KT GiGA WiFi Wave 2
+          - **SoC:** Qualcomm IPQ4019 (Quad-core ARM @ 717MHz)
+          - **RAM:** 256MB DDR3
+          - **Flash:** 16MB NOR + 128MB NAND
+          - **WiFi:** QCA4019 2.4GHz + 5GHz
+          - **Ethernet:** QCA8075 (4x LAN + 1x WAN Gigabit)
+
+          ### Packages Included
+          - **Proxy:** xray-core, sing-box, luci-app-passwall2
+          - **AdBlock:** adblock, luci-app-adblock
+          - **Torrent:** transmission-daemon + web control
+          - **NAS:** samba4-server, USB storage (ext4/ntfs/exfat)
+          - **DNS:** mosdns, smartdns, dnsmasq-full
+          - **VPN:** WireGuard, OpenVPN
+          - **QoS:** nft-qos, sqm-scripts
+          - **Monitor:** nlbwmon, collectd, tcpdump, iperf3, htop
+          - **Tools:** ttyd, ddns-go, WOL, nmap, vim, nano
+          - **Theme:** luci-theme-argon
+
+          ### ⚠️ CRITICAL WARNINGS
+          1. **NEVER erase ART partition (0x170000)** - contains unique WiFi calibration!
+          2. **Backup ART before flashing!** Without it, WiFi is dead forever.
+          3. Test with initramfs via TFTP first before permanent flash.
+
+          ### Flashing Instructions
+          1. Connect UART (115200 baud, 3.3V)
+          2. Set PC to 192.168.1.2, run TFTP server
+          3. Copy `*-initramfs-fit-uImage.itb` to TFTP root
+          4. In U-Boot:
+          ```
+          setenv ipaddr 192.168.1.1
+          setenv serverip 192.168.1.2
+          tftpboot 0x82000000 *-initramfs-fit-uImage.itb
+          bootm 0x82000000
+          ```
+          5. If it boots, flash permanently:
+          ```
+          sysupgrade -n *-squashfs-nand-sysupgrade.bin
+          ```
+        draft: false
+        prerelease: false
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+    - name: Build Summary
+      if: always()
+      run: |
+        echo "═══════════════════════════════════════"
+        echo "  Build Summary"
+        echo "═══════════════════════════════════════"
+        echo "Status: ${{ job.status }}"
+        echo "Branch: ${{ env.REPO_BRANCH }}"
+        echo "Device: Davolink DV01-901H"
+        echo "Run #:  ${{ github.run_number }}"
+        echo "═══════════════════════════════════════"

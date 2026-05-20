@@ -1,0 +1,16 @@
+
+# Davolink DV01-901H (KT GiGA WiFi Wave 2 / KT-708)
+define Device/davolink_dv01-901h
+	$(call Device/FitImage)
+	$(call Device/UbiFit)
+	DEVICE_VENDOR := Davolink
+	DEVICE_MODEL := DV01-901H
+	DEVICE_VARIANT := KT-708
+	DEVICE_DTS := qcom-ipq4019-dv01-901h
+	SOC := qcom-ipq4019
+	BLOCKSIZE := 128k
+	PAGESIZE := 2048
+	DEVICE_PACKAGES := kmod-ath10k-ct ath10k-firmware-qca4019-ct 		kmod-usb3 kmod-usb-storage block-mount 		luci luci-theme-argon 		wpad-openssl 		kmod-gpio-button-hotplug kmod-leds-gpio
+	SUPPORTED_DEVICES += dv01-901h kt-708
+endef
+TARGET_DEVICES += davolink_dv01-901h

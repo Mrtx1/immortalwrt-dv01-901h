@@ -1,0 +1,322 @@
+// SPDX-License-Identifier: GPL-2.0-or-later OR MIT
+/*
+ * Davolink DV01-901H (KT GiGA WiFi Wave 2 / KT-708)
+ * Qualcomm IPQ4019 (IPQ40xx)
+ * 
+ * Device Tree Source extracted from stock firmware DTB
+ * Compatible with ImmortalWrt master / openwrt-24.10
+ */
+
+/dts-v1/;
+
+#include "qcom-ipq4019.dtsi"
+#include <dt-bindings/gpio/gpio.h>
+#include <dt-bindings/input/input.h>
+#include <dt-bindings/leds/common.h>
+
+/ {
+	model = "Davolink DV01-901H (KT-708)";
+	compatible = "davolink,dv01-901h", "qcom,ipq4019";
+
+	aliases {
+		serial0 = &blsp1_uart1;
+		led-boot = &led_status;
+		led-failsafe = &led_status;
+		led-running = &led_status;
+		led-upgrade = &led_status;
+		label-mac-device = &gmac0;
+	};
+
+	chosen {
+		bootargs = "root_rfs=0x00000000 flash_type=norplusnand";
+		stdout-path = "serial0:115200n8";
+	};
+
+	memory {
+		device_type = "memory";
+		reg = <0x80000000 0x10000000>; /* 256MB DDR3 */
+	};
+
+	reserved-memory {
+		#address-cells = <1>;
+		#size-cells = <1>;
+		ranges;
+
+		smem@87e00000 {
+			reg = <0x87e00000 0x80000>;
+			no-map;
+		};
+
+		tz@87e80000 {
+			reg = <0x87e80000 0x180000>;
+			no-map;
+		};
+	};
+
+	keys {
+		compatible = "gpio-keys";
+
+		reset {
+			label = "reset";
+			gpios = <&tlmm 63 GPIO_ACTIVE_LOW>;
+			linux,code = <KEY_RESTART>;
+			debounce-interval = <60>;
+		};
+
+		wps {
+			label = "wps";
+			gpios = <&tlmm 4 GPIO_ACTIVE_LOW>;
+			linux,code = <KEY_WPS_BUTTON>;
+			debounce-interval = <60>;
+		};
+	};
+
+	leds {
+		compatible = "gpio-leds";
+
+		led_status: status {
+			label = "green:status";
+			gpios = <&tlmm 58 GPIO_ACTIVE_HIGH>;
+			linux,default-trigger = "default-on";
+		};
+
+		wan {
+			label = "green:wan";
+			gpios = <&tlmm 0 GPIO_ACTIVE_HIGH>;
+			linux,default-trigger = "netdev";
+			linux,dev = "eth0";
+		};
+	};
+};
+
+&blsp1_uart1 {
+	status = "okay";
+	pinctrl-0 = <&serial_pins>;
+	pinctrl-names = "default";
+};
+
+&tlmm {
+	serial_pins: serial_pinmux {
+		mux {
+			pins = "gpio60", "gpio61";
+			function = "blsp_uart0";
+			bias-disable;
+		};
+	};
+
+	spi_0_pins: spi_0_pinmux {
+		mux {
+			function = "blsp_spi0";
+			pins = "gpio55", "gpio56", "gpio57";
+			drive-strength = <12>;
+			bias-disable;
+		};
+
+		mux_cs {
+			function = "gpio";
+			pins = "gpio54", "gpio59";
+			drive-strength = <2>;
+			bias-disable;
+			output-high;
+		};
+	};
+};
+
+&spi_0 {
+	status = "okay";
+	pinctrl-0 = <&spi_0_pins>;
+	pinctrl-names = "default";
+	cs-gpios = <&tlmm 54 GPIO_ACTIVE_LOW>,
+	           <&tlmm 59 GPIO_ACTIVE_LOW>;
+
+	flash@0 {
+		compatible = "jedec,spi-nor";
+		reg = <0>;
+		spi-max-frequency = <24000000>;
+		#address-cells = <1>;
+		#size-cells = <1>;
+
+		partitions {
+			compatible = "fixed-partitions";
+			#address-cells = <1>;
+			#size-cells = <1>;
+
+			partition@0 {
+				label = "SBL1";
+				reg = <0x000000 0x040000>;
+				read-only;
+			};
+
+			partition@40000 {
+				label = "MIBIB";
+				reg = <0x040000 0x020000>;
+				read-only;
+			};
+
+			partition@60000 {
+				label = "QSEE";
+				reg = <0x060000 0x060000>;
+				read-only;
+			};
+
+			partition@c0000 {
+				label = "CDT";
+				reg = <0x0c0000 0x010000>;
+				read-only;
+			};
+
+			partition@d0000 {
+				label = "DDRPARAMS";
+				reg = <0x0d0000 0x010000>;
+				read-only;
+			};
+
+			partition@e0000 {
+				label = "APPSBLENV";
+				reg = <0x0e0000 0x010000>;
+			};
+
+			partition@f0000 {
+				label = "APPSBL";
+				reg = <0x0f0000 0x080000>;
+				read-only;
+			};
+
+			/* ART partition - CONTAINS UNIQUE WIFI CALIBRATION DATA */
+			partition@170000 {
+				label = "ART";
+				reg = <0x170000 0x010000>;
+				read-only;
+
+				nvmem-layout {
+					compatible = "fixed-layout";
+					#address-cells = <1>;
+					#size-cells = <1>;
+
+					precal_art_1000: precal@1000 {
+						reg = <0x1000 0x2f20>;
+					};
+
+					precal_art_5000: precal@5000 {
+						reg = <0x5000 0x2f20>;
+					};
+				};
+			};
+
+			partition@180000 {
+				label = "vmacs";
+				reg = <0x180000 0x080000>;
+
+				nvmem-layout {
+					compatible = "fixed-layout";
+					#address-cells = <1>;
+					#size-cells = <1>;
+
+					macaddr_wan: macaddr@0 {
+						reg = <0x0 0x6>;
+					};
+
+					macaddr_lan: macaddr@10 {
+						reg = <0x10 0x6>;
+					};
+
+					macaddr_wifi0: macaddr@20 {
+						reg = <0x20 0x6>;
+					};
+
+					macaddr_wifi1: macaddr@30 {
+						reg = <0x30 0x6>;
+					};
+				};
+			};
+		};
+	};
+
+	/* SPI NAND Flash - 128MB */
+	spi-nand@1 {
+		compatible = "spi-nand";
+		reg = <1>;
+		spi-max-frequency = <24000000>;
+		#address-cells = <1>;
+		#size-cells = <1>;
+
+		partitions {
+			compatible = "fixed-partitions";
+			#address-cells = <1>;
+			#size-cells = <1>;
+
+			partition@0 {
+				label = "bootkernel";
+				reg = <0x00000000 0x02000000>;
+			};
+
+			partition@2000000 {
+				compatible = "linux,ubi";
+				label = "ubi";
+				reg = <0x02000000 0x06000000>;
+			};
+		};
+	};
+};
+
+&gmac0 {
+	status = "okay";
+	phy-mode = "internal";
+
+	fixed-link {
+		speed = <1000>;
+		full-duplex;
+		pause;
+	};
+};
+
+&switch {
+	status = "okay";
+};
+
+&swport0 {
+	label = "cpu";
+	ethernet = <&gmac0>;
+	status = "okay";
+
+	fixed-link {
+		speed = <1000>;
+		full-duplex;
+		pause;
+		asym-pause;
+	};
+};
+
+&swport1 { label = "lan4"; status = "okay"; };
+&swport2 { label = "lan3"; status = "okay"; };
+&swport3 { label = "lan2"; status = "okay"; };
+&swport4 { label = "lan1"; status = "okay"; };
+
+&swport5 {
+	label = "wan";
+	status = "okay";
+	nvmem-cells = <&macaddr_wan>;
+	nvmem-cell-names = "mac-address";
+};
+
+&wifi0 {
+	status = "okay";
+	nvmem-cells = <&precal_art_1000>, <&macaddr_wifi0>;
+	nvmem-cell-names = "pre-calibration", "mac-address";
+	qca,ath10k-calibration-variant = "Davolink-DV01-901H";
+};
+
+&wifi1 {
+	status = "okay";
+	nvmem-cells = <&precal_art_5000>, <&macaddr_wifi1>;
+	nvmem-cell-names = "pre-calibration", "mac-address";
+	qca,ath10k-calibration-variant = "Davolink-DV01-901H";
+};
+
+&usb3_ss_phy { status = "okay"; };
+&usb3_hs_phy { status = "okay"; };
+&usb3 { status = "okay"; };
+&usb3_dwc3 { dr_mode = "host"; };
+
+&crypto { status = "okay"; };
+&watchdog { status = "okay"; };
